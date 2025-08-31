@@ -1,0 +1,15 @@
+# created by virtualenv automatically
+# 忽略整个目录
+video_storage/
+ffmpeg-master-latest-win64-gpl/
+
+# 忽略所有 mp4、zip、exe
+*.mp4
+*.zip
+
+
+# 忽略临时/缓存文件
+*.log
+*.tmp
+__pycache__/
+

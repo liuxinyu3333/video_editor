@@ -1,11 +1,11 @@
 # 忽略视频和大文件目录
 video_storage/
 ffmpeg-master-latest-win64-gpl/
-
+chatgpt-selenium-profile/
 # 忽略常见的大文件类型
 *.mp4
 *.zip
-*.exe
+
 
 # Python 缓存
 __pycache__/

@@ -9,8 +9,10 @@ from yt_dlp.utils import PostProcessingError, DownloadError
 import shutil
 
 # ========== 配置区 ==========
-SAVE_DIR = r"E:/coin_works/project/video_storage"
-ARCHIVE_FILE = os.path.join(SAVE_DIR, "downloaded.txt")
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_STORAGE_DIR = PROJECT_ROOT / "video_storage"
+SAVE_DIR = str(PROJECT_ROOT / "video_storage")
+ARCHIVE_FILE = str(PROJECT_ROOT / "downloaded.txt")
 USE_YTDLP_CLI = True
 YTDLP_EXE = r"yt-dlp"
 FFMPEG_BIN_DIR = r"E:\ffmpeg-master-latest-win64-gpl\ffmpeg-master-latest-win64-gpl\bin"
@@ -19,18 +21,17 @@ SOURCES = [
     "https://www.youtube.com/@KoluniteVIP", "https://www.youtube.com/@tiabtc",
     "https://www.youtube.com/@junzhangbtc", "https://www.youtube.com/@Traderfengge",
     "https://www.youtube.com/@suozhangketang", "https://www.youtube.com/@BTCfeiyang",
-    "https://www.youtube.com/@crypto_punks", "https://www.youtube.com/@blockchaindailynews",
-    "https://www.youtube.com/@dacapitalscom", "https://www.youtube.com/@BTCCocoo",
+    "https://www.youtube.com/@blockchaindailynews", "https://www.youtube.com/@dacapitalscom", 
 ]
 MAX_PER_SOURCE = 2
 PREFERRED_SUB_LANGS_FOR_DOWNLOAD = ["zh-Hans", "zh", "zh-CN", "zh-Hant", "en"]
 SKIP_LIVE = True
 SKIP_SHORTS = True
 MIN_DURATION_SEC = 60 if SKIP_SHORTS else 0
-KEYWORDS_REGEX = r"(BTC|比特币)"
-SEARCH_KEYWORD = ""
-SEARCH_RESULTS_LIMIT = 20
-TIME_WINDOW_DAYS = 1
+KEYWORDS_REGEX = ""
+# SEARCH_KEYWORD = ""
+# SEARCH_RESULTS_LIMIT = 20
+# TIME_WINDOW_DAYS = 1
 REQUIRE_SUBTITLES = True
 REQUIRE_MANUAL_SUBS = False
 ALLOWED_SUB_LANGS = []
@@ -198,24 +199,13 @@ def append_manifest(record: dict):
     with manifest.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-def _emit_subtitle_txt(video_path: str, subtitle_path: Optional[str]) -> None:
-    try:
-        if not subtitle_path: return
-        video_file = Path(video_path)
-        txt_path = video_file.with_suffix(".txt")
-        txt_path.write_text(
-            Path(subtitle_path).read_text(encoding="utf-8", errors="ignore"),
-            encoding="utf-8", errors="ignore",
-        )
-    except Exception as e:
-        print(f"  [warn] 生成字幕 txt 失败：{e}")
 
 def _run_yt_dlp_cli(url: str, sub_lang: str = "zh-Hans", client: str = "web") -> None:
     cmd = [
         YTDLP_EXE, "--write-sub", "--write-auto-sub", "--sub-langs", sub_lang,
         "--convert-subs", "srt", "--paths", f"home:{SAVE_DIR}",
         "-o", "%(uploader)s/%(upload_date>%Y-%m-%d)s - %(title)s.%(ext)s",
-        "--skip-unavailable-fragments", "--retries", "2", "--fragment-retries", "2", url,
+        "--skip-unavailable-fragments", "--retries", "15", "--fragment-retries", "20", "--http-chunk-size", "5M", url,
     ]
     if ARCHIVE_FILE:
         cmd.insert(-1, "--download-archive")
@@ -230,46 +220,46 @@ def _run_yt_dlp_cli(url: str, sub_lang: str = "zh-Hans", client: str = "web") ->
     print("  [cli] 执行：", " ".join(shlex.quote(x) for x in cmd))
     subprocess.run(cmd, check=True)
 
-def _search_opts() -> Dict[str, Any]:
-    opts = {
-        "quiet": True, "skip_download": True, "forceipv4": True,
-        "extractor_retries": 4, "retry_sleep_functions": {"extractor": "exponential(1,2,5)"},
-        "socket_timeout": 20,
-    }
-    _inject_cookies(opts)
-    return opts
+# def _search_opts() -> Dict[str, Any]:
+#     opts = {
+#         "quiet": True, "skip_download": True, "forceipv4": True,
+#         "extractor_retries": 4, "retry_sleep_functions": {"extractor": "exponential(1,2,5)"},
+#         "socket_timeout": 20,
+#     }
+#     _inject_cookies(opts)
+#     return opts
 
-def search_videos_by_keyword(keyword: str, limit: int) -> List[Dict[str, Any]]:
-    if not keyword: return []
-    query = f"ytsearchdate{limit}:{keyword}"
-    print(f"\n== 关键词搜索：{keyword}（取最新 {limit} 条）")
-    results = []
+# def search_videos_by_keyword(keyword: str, limit: int) -> List[Dict[str, Any]]:
+#     if not keyword: return []
+#     query = f"ytsearchdate{limit}:{keyword}"
+#     print(f"\n== 关键词搜索：{keyword}（取最新 {limit} 条）")
+#     results = []
 
-    with YoutubeDL({**_search_opts(), "extract_flat": True}) as ydl:
-        info = ydl.extract_info(query, download=False) or {}
-        entries = info.get("entries") or []
-    ids_or_urls = []
-    for e in entries:
-        u = e.get("url") or e.get("webpage_url") or e.get("id")
-        if not u: continue
-        if len(u) == 11 and "/watch?" not in u: u = f"https://www.youtube.com/watch?v={u}"
-        ids_or_urls.append(u)
+#     with YoutubeDL({**_search_opts(), "extract_flat": True}) as ydl:
+#         info = ydl.extract_info(query, download=False) or {}
+#         entries = info.get("entries") or []
+#     ids_or_urls = []
+#     for e in entries:
+#         u = e.get("url") or e.get("webpage_url") or e.get("id")
+#         if not u: continue
+#         if len(u) == 11 and "/watch?" not in u: u = f"https://www.youtube.com/watch?v={u}"
+#         ids_or_urls.append(u)
 
-    for u in ids_or_urls:
-        info_full = _extract_video_info_with_fallback(u)
-        if info_full: results.append(info_full)
-    print(f"  [{now()}] 搜索到 {len(results)} 条候选（已补全元数据）")
-    return results
+#     for u in ids_or_urls:
+#         info_full = _extract_video_info_with_fallback(u)
+#         if info_full: results.append(info_full)
+#     print(f"  [{now()}] 搜索到 {len(results)} 条候选（已补全元数据）")
+#     return results
 
-def _is_within_time_window(upload_date_str: Optional[str], days: int) -> bool:
-    if not upload_date_str: return False
-    try:
-        up_date = datetime.strptime(upload_date_str, "%Y%m%d").date()
-    except Exception:
-        return False
-    today_utc = datetime.now(timezone.utc).date()
-    if days <= 0: return up_date == today_utc
-    return (today_utc - up_date).days <= days
+# def _is_within_time_window(upload_date_str: Optional[str], days: int) -> bool:
+#     if not upload_date_str: return False
+#     try:
+#         up_date = datetime.strptime(upload_date_str, "%Y%m%d").date()
+#     except Exception:
+#         return False
+#     today_utc = datetime.now(timezone.utc).date()
+#     if days <= 0: return up_date == today_utc
+#     return (today_utc - up_date).days <= days
 
 def _has_subtitles(info: Dict[str, Any]) -> Tuple[bool, List[str], bool]:
     subs = info.get("subtitles") or {}
@@ -295,20 +285,20 @@ def _has_subtitles(info: Dict[str, Any]) -> Tuple[bool, List[str], bool]:
             return False, [], False
     return True, [], REQUIRE_MANUAL_SUBS
 
-def filter_search_results(infos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    out = []
-    for info in infos:
-        if SKIP_LIVE and (info.get("is_live") or info.get("was_live")): continue
-        dur = info.get("duration") or 0
-        if MIN_DURATION_SEC and dur and dur < MIN_DURATION_SEC: continue
-        if not _is_within_time_window(info.get("upload_date"), TIME_WINDOW_DAYS): continue
-        ok, langs, manual_only = _has_subtitles(info)
-        if not ok: continue
-        info["_preferred_sub_langs"] = langs
-        info["_need_manual_only"] = manual_only
-        out.append(info)
-    out.sort(key=lambda e: (e.get("upload_date") or "00000000", e.get("timestamp") or 0), reverse=True)
-    return out
+# def filter_search_results(infos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+#     out = []
+#     for info in infos:
+#         if SKIP_LIVE and (info.get("is_live") or info.get("was_live")): continue
+#         dur = info.get("duration") or 0
+#         if MIN_DURATION_SEC and dur and dur < MIN_DURATION_SEC: continue
+#         if not _is_within_time_window(info.get("upload_date"), TIME_WINDOW_DAYS): continue
+#         ok, langs, manual_only = _has_subtitles(info)
+#         if not ok: continue
+#         info["_preferred_sub_langs"] = langs
+#         info["_need_manual_only"] = manual_only
+#         out.append(info)
+#     out.sort(key=lambda e: (e.get("upload_date") or "00000000", e.get("timestamp") or 0), reverse=True)
+#     return out
 
 def filter_channel_targets_by_subtitles(urls: List[str]) -> List[Tuple[str, Optional[List[str]]]]:
     out = []
@@ -550,52 +540,52 @@ def main():
 
     all_targets = []
 
-    if SEARCH_KEYWORD.strip():
-        print(f"\n[搜索模式] 关键词：{SEARCH_KEYWORD} | 时间窗口：{TIME_WINDOW_DAYS} 天 | 只要检测到字幕就下载：{REQUIRE_SUBTITLES}")
-        raw_infos = search_videos_by_keyword(SEARCH_KEYWORD.strip(), SEARCH_RESULTS_LIMIT)
+    # if SEARCH_KEYWORD.strip():
+    #     print(f"\n[搜索模式] 关键词：{SEARCH_KEYWORD} | 时间窗口：{TIME_WINDOW_DAYS} 天 | 只要检测到字幕就下载：{REQUIRE_SUBTITLES}")
+    #     raw_infos = search_videos_by_keyword(SEARCH_KEYWORD.strip(), SEARCH_RESULTS_LIMIT)
 
-        print("\n[诊断] 搜索候选概览（日期/时长/字幕语言）")
-        for i, info in enumerate(raw_infos, 1):
-            up = info.get("upload_date")
-            dur = info.get("duration")
-            subs = sorted((info.get("subtitles") or {}).keys())
-            autos = sorted((info.get("automatic_captions") or {}).keys())
-            print(f"  {i:02d}. {up} | {dur or '-'}s | subs={subs[:6]}{'...' if len(subs)>6 else ''} | autos={autos[:6]}{'...' if len(autos)>6 else ''}")
+    #     print("\n[诊断] 搜索候选概览（日期/时长/字幕语言）")
+    #     for i, info in enumerate(raw_infos, 1):
+    #         up = info.get("upload_date")
+    #         dur = info.get("duration")
+    #         subs = sorted((info.get("subtitles") or {}).keys())
+    #         autos = sorted((info.get("automatic_captions") or {}).keys())
+    #         print(f"  {i:02d}. {up} | {dur or '-'}s | subs={subs[:6]}{'...' if len(subs)>6 else ''} | autos={autos[:6]}{'...' if len(autos)>6 else ''}")
 
-        filtered = filter_search_results(raw_infos)
-        if not filtered: print("（没有满足条件的搜索结果）")
-        for info in filtered:
-            url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info.get('id')}"
-            langs = info.get("_preferred_sub_langs") or []
-            show_langs = langs if langs else PREFERRED_SUB_LANGS_FOR_DOWNLOAD
-            print(f"  -> 命中：{info.get('upload_date')} | {info.get('title')} | 计划请求字幕: {show_langs}")
-            all_targets.append((url, langs if langs else None))
+    #     filtered = filter_search_results(raw_infos)
+    #     if not filtered: print("（没有满足条件的搜索结果）")
+    #     for info in filtered:
+    #         url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info.get('id')}"
+    #         langs = info.get("_preferred_sub_langs") or []
+    #         show_langs = langs if langs else PREFERRED_SUB_LANGS_FOR_DOWNLOAD
+    #         print(f"  -> 命中：{info.get('upload_date')} | {info.get('title')} | 计划请求字幕: {show_langs}")
+    #         all_targets.append((url, langs if langs else None))
+    # else:
+    if KEYWORDS_REGEX: print(f"关键词过滤（频道模式）：/{KEYWORDS_REGEX}/  （大小写不敏感）")
+    if SKIP_SHORTS: print("跳过 Shorts（duration < 60s）已启用。")
+    if SKIP_LIVE: print("跳过直播/回放已启用。")
+
+    urls = []
+    for src in SOURCES:
+        print(f"\n== 解析来源：{src}")
+        try:
+            entries = fetch_channel_videos(src)
+        except Exception as e:
+            print(f"  [warn] 获取频道视频失败：{e}")
+            continue
+        picked = pick_latest_urls_from_entries(entries, MAX_PER_SOURCE)
+        if not picked:
+            print("  （筛选后无匹配的视频）")
+            continue
+        for u in picked: print("  -> 目标视频：", u)
+        urls.extend(picked)
+
+    if REQUIRE_SUBTITLES or REQUIRE_MANUAL_SUBS or (ALLOWED_SUB_LANGS and len(ALLOWED_SUB_LANGS) > 0):
+        filtered_targets = filter_channel_targets_by_subtitles(urls)
+        if not filtered_targets: print("（频道模式：无满足字幕条件的视频）")
+        all_targets = filtered_targets
     else:
-        if KEYWORDS_REGEX: print(f"关键词过滤（频道模式）：/{KEYWORDS_REGEX}/  （大小写不敏感）")
-        if SKIP_SHORTS: print("跳过 Shorts（duration < 60s）已启用。")
-        if SKIP_LIVE: print("跳过直播/回放已启用。")
-
-        urls = []
-        for src in SOURCES:
-            print(f"\n== 解析来源：{src}")
-            try:
-                entries = fetch_channel_videos(src)
-            except Exception as e:
-                print(f"  [warn] 获取频道视频失败：{e}")
-                continue
-            picked = pick_latest_urls_from_entries(entries, MAX_PER_SOURCE)
-            if not picked:
-                print("  （筛选后无匹配的视频）")
-                continue
-            for u in picked: print("  -> 目标视频：", u)
-            urls.extend(picked)
-
-        if REQUIRE_SUBTITLES or REQUIRE_MANUAL_SUBS or (ALLOWED_SUB_LANGS and len(ALLOWED_SUB_LANGS) > 0):
-            filtered_targets = filter_channel_targets_by_subtitles(urls)
-            if not filtered_targets: print("（频道模式：无满足字幕条件的视频）")
-            all_targets = filtered_targets
-        else:
-            all_targets = [(u, None) for u in urls]
+        all_targets = [(u, None) for u in urls]
 
     if not all_targets:
         print("\n没有可下载的视频。完成 ✅")
