@@ -18,8 +18,8 @@ YTDLP_EXE = r"yt-dlp"
 FFMPEG_BIN_DIR = r"E:\ffmpeg-master-latest-win64-gpl\ffmpeg-master-latest-win64-gpl\bin"
 
 SOURCES = [
-    "https://www.youtube.com/@KoluniteVIP", "https://www.youtube.com/@tiabtc",
-    "https://www.youtube.com/@junzhangbtc", "https://www.youtube.com/@Traderfengge",
+    "https://www.youtube.com/@junzhangbtc", "https://www.youtube.com/@KoluniteVIP", 
+    "https://www.youtube.com/@tiabtc", "https://www.youtube.com/@Traderfengge",
     "https://www.youtube.com/@suozhangketang", "https://www.youtube.com/@BTCfeiyang",
     "https://www.youtube.com/@blockchaindailynews", "https://www.youtube.com/@dacapitalscom", 
 ]
@@ -36,7 +36,7 @@ REQUIRE_SUBTITLES = True
 REQUIRE_MANUAL_SUBS = False
 ALLOWED_SUB_LANGS = []
 USE_COOKIES = True
-COOKIE_FILE = r"E:\chromeDownload\cookies.txt"
+COOKIE_FILE = r"cookies.txt"
 MANIFEST_PATH = os.path.join(SAVE_DIR, "manifest.jsonl")
 
 # 是否在运行前清空本地存储（视频/字幕/manifest/归档）

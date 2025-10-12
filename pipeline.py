@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 import video_loader
 import video_cut
 import upload_to_gpt
-
-
+import Email_sender
+import use_gpt_api
+import img_to_url
 def _read_new_records(manifest_path: Path, since_ts: int) -> List[Dict[str, Any]]:
     if not manifest_path.exists():
         return []
@@ -94,12 +95,14 @@ def main():
             continue
 
         # 抽帧
-        video_cut.process_one_video(vpath, spath, out_root, max_subs=0, similarity_threshold=5)
-
+        subtitles  = video_cut.process_one_video(vpath, spath, out_root, max_subs=0, similarity_threshold=5, subs_per_chunk = 6)
+        use_gpt_api.main(subtitles)
         frames_dir = video_cut._choose_out_dir(out_root, uploader=vpath.parent.name, base=vpath.stem)
         if not frames_dir.exists():
             print(f"[pipeline] 未找到帧目录：{frames_dir}")
             continue
+
+
 
         video_folder = _prepare_video_folder_and_move_txt(vpath)
         zip_path = video_folder / "frames.zip"
@@ -188,13 +191,18 @@ def run_one_creator(channel_url: str, pick_n: int = 1) -> None:
             continue
 
         # 4.1 抽帧（按字幕条目的起点/中点/终点各取一帧，自动去重）
-        video_cut.process_one_video(
+        subtitles = video_cut.process_one_video(
             vpath, spath, out_root,
             max_subs=0,               # 0=不限制；可改小加速
-            similarity_threshold=5     # 感知哈希相似阈值
+            similarity_threshold=5,     # 感知哈希相似阈值
+            subs_per_chunk = 6
         )
-
-        # 4.2 找到该视频对应的帧目录（video_cut 的内部路径规则）
+        frames_dir = video_cut._choose_out_dir(out_root, uploader=vpath.parent.name, base=vpath.stem)
+        print(str(frames_dir))
+        urls = img_to_url.build_public_urls(frames_dir)
+        use_gpt_api.main(subtitles, urls)
+        # 4.2 找到该视频对应的帧目录（video_cut 的内部路径规则
+        """
         frames_dir = video_cut._choose_out_dir(out_root, uploader=vpath.parent.name, base=vpath.stem)
         if not frames_dir.exists():
             print(f"[single] 未找到帧目录：{frames_dir}")
@@ -221,8 +229,8 @@ def run_one_creator(channel_url: str, pick_n: int = 1) -> None:
                     child.unlink()
                 except Exception:
                     pass
-        files_to_send = [zip_path, new_txt_path]
-        """
+        files_to_send = [str(zip_path), str(new_txt_path)]
+        
         prompt_text1 = (
             "你是一位加密货币短线交易博主，擅长用简洁但专业的口吻，在社交媒体上分析市场走势。 "
             "请根据我提供的压缩文件中的图片和字幕结合当前时间，生成一篇市场点评，要求： "
@@ -259,7 +267,7 @@ def run_one_creator(channel_url: str, pick_n: int = 1) -> None:
             "4. **输出格式** - 不要分标题段落，保持社交媒体一段话的流畅阅读感。 - 文末可附一句简短总结或提醒。 "
 
         )
-        """
+        
         prompt_text5 = (
         "你是一位加密货币短线交易博主，擅长用简洁但专业的口吻，在社交媒体上分析市场走势。 "
         "请根据我提供的压缩文件中的图片和字幕结合当前时间，生成一篇市场点评，要求： "
@@ -270,10 +278,20 @@ def run_one_creator(channel_url: str, pick_n: int = 1) -> None:
 
         )
         #prompt_text1, prompt_text2, prompt_text3, prompt_text4,
-        prompts = [ prompt_text5]
+        prompts = [prompt_text1, prompt_text2, prompt_text3, prompt_text4,prompt_text5]
+        with open("gpt_replies.txt", "w", encoding="utf-8") as f:
+            f.write("=== GPT批量回复结果 ===\n\n")
         for p in prompts:
             upload_to_gpt.run(p, files_to_send)
-        print(f"[single] 完成：{vpath.stem} -> {zip_path}")
+        """
+        files_to_send = ["middle_points_output.txt", "final_output.txt"]
+        #Email_sender.main()
+        Email_sender.main(
+            body_text= "这是频道："+ channel_url + " 最新视频的解析，分为中间数据信息，和总的分析文本",
+            target_email="xinyu.liu1@rwth-aachen.de",
+            filepaths= files_to_send
+        )
+        print(f"[single] 完成：{vpath.stem}")
         # video_loader._clean_storage()
 
 
@@ -287,17 +305,25 @@ if __name__ == "__main__":
         TZ = ZoneInfo("America/New_York")
     except Exception:
         TZ = None  # 没有 zoneinfo 就用本地时区
-
+    count = 0
+    
     while True :
-        now = datetime.now()
+        
+        now = datetime.now(TZ)
         for ele in sources:
             run_one_creator(ele)
+            break
         if now.hour >= 7 and now.hour <= 12:
             time.sleep(1800)
         if now.hour > 12 and now.hour <= 24:
             time.sleep(3600)
         if now.hour >= 0 and now.hour < 7 :
+            count += 1
             time.sleep(7200)
+        if count == 15:
+            video_loader._clean_storage()
+            count = 0
+
 
 
     

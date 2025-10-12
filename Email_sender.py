@@ -1,10 +1,10 @@
 import os, mimetypes, smtplib, argparse, ssl
 from email.message import EmailMessage
+from typing import List
+import time
 
-def send_mail(smtp_host, smtp_port, username, password, mail_from, mail_to, subject, body, filepath, debug=False):
+def send_mail(smtp_host, smtp_port, username, password, mail_from, mail_to, subject, body, filepaths: List[str], debug=False, connection_pool=None):
     # ---- 基础校验 ----
-    if not os.path.isfile(filepath):
-        raise FileNotFoundError(f"文件不存在：{filepath}")
     if not username or not password:
         raise ValueError("请提供完整的邮箱账号与授权码（QQ 必须使用授权码，不是登录密码）")
     if not mail_from:
@@ -20,18 +20,41 @@ def send_mail(smtp_host, smtp_port, username, password, mail_from, mail_to, subj
     msg["Subject"] = subject
     msg.set_content(body)
 
-    ctype, _ = mimetypes.guess_type(filepath)
-    maintype, subtype = (ctype.split("/", 1) if ctype else ("application", "octet-stream"))
-    with open(filepath, "rb") as f:
-        msg.add_attachment(f.read(), maintype=maintype, subtype=subtype,
-                           filename=os.path.basename(filepath))
+    # 添加多个附件
+    for filepath in filepaths:
+        if not os.path.isfile(filepath):
+            print(f"[WARN] 文件不存在，跳过：{filepath}")
+            continue
+            
+        ctype, _ = mimetypes.guess_type(filepath)
+        maintype, subtype = (ctype.split("/", 1) if ctype else ("application", "octet-stream"))
+        with open(filepath, "rb") as f:
+            msg.add_attachment(f.read(), maintype=maintype, subtype=subtype,
+                               filename=os.path.basename(filepath))
+        print(f"[INFO] 已添加附件：{os.path.basename(filepath)}")
 
     # ---- 建立连接并发送 ----
+    if connection_pool and connection_pool.get('server'):
+        # 复用连接
+        server = connection_pool['server']
+        try:
+            server.send_message(msg)
+            print(f"[SUCCESS] 邮件发送成功！（复用连接）")
+            return server  # 返回连接供下次使用
+        except Exception as e:
+            print(f"[ERROR] 复用连接发送失败，尝试重新连接：{e}")
+            try:
+                server.quit()
+            except:
+                pass
+            connection_pool['server'] = None
+    
+    # 新建连接
     context = ssl.create_default_context()
     if smtp_port == 465:
-        server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=60, context=context)
+        server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30, context=context)  # 减少超时时间
     else:
-        server = smtplib.SMTP(smtp_host, smtp_port, timeout=60)
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)  # 减少超时时间
 
     try:
         if debug:
@@ -44,14 +67,62 @@ def send_mail(smtp_host, smtp_port, username, password, mail_from, mail_to, subj
             server.ehlo()
 
         server.login(username, password)
+        print(f"[INFO] 登录成功，准备发送邮件到：{mail_to}")
         server.send_message(msg)
-    finally:
+        print(f"[SUCCESS] 邮件发送成功！")
+        
+        # 保存连接供下次使用
+        if connection_pool is not None:
+            connection_pool['server'] = server
+            return server
+        else:
+            server.quit()
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] 发送失败：{e}")
         try:
             server.quit()
-        except Exception:
+        except:
+            pass
+        raise
+
+def send_mail_batch(smtp_host, smtp_port, username, password, mail_from, mail_list, subject, body, filepaths: List[str], debug=False):
+    """批量发送邮件，复用连接"""
+    connection_pool = {'server': None}
+    
+    for i, mail_to in enumerate(mail_list):
+        print(f"\n[INFO] 发送第 {i+1}/{len(mail_list)} 封邮件到：{mail_to}")
+        
+        try:
+            # 复用连接发送
+            server = send_mail(smtp_host, smtp_port, username, password, mail_from, 
+                             mail_to, subject, body, filepaths, debug, connection_pool)
+            
+            # 短暂等待，避免发送过快
+            if i < len(mail_list) - 1:  # 不是最后一封
+                time.sleep(2)  # 减少到2秒
+                
+        except Exception as e:
+            print(f"[ERROR] 发送到 {mail_to} 失败：{e}")
+            # 重置连接池
+            if connection_pool.get('server'):
+                try:
+                    connection_pool['server'].quit()
+                except:
+                    pass
+                connection_pool['server'] = None
+            continue
+    
+    # 最后关闭连接
+    if connection_pool.get('server'):
+        try:
+            connection_pool['server'].quit()
+            print("[INFO] 已关闭SMTP连接")
+        except:
             pass
 
-def main(body_text: str | None = None, target_email: str | None = None):
+def main(body_text: str | None = None, target_email: str | None = None, filepaths: List[str] | None = None, batch_mode: bool = False):
     p = argparse.ArgumentParser(description="发送附件到邮箱（QQ 邮箱）")
 
     # QQ 邮箱推荐配置
@@ -63,10 +134,11 @@ def main(body_text: str | None = None, target_email: str | None = None):
 
     p.add_argument("--mail_from", default="1758107959@qq.com", help="发件人邮箱（需与账号相同）")
     p.add_argument("--to", default="xinyu.liu1@rwth-aachen.de", help="收件人邮箱")
+    p.add_argument("--batch", nargs="+", help="批量发送到多个邮箱")
 
     p.add_argument("--sub", default="gpt生成的文件", help="邮件主题")
     p.add_argument("--body", default="见附件。", help="正文")
-    p.add_argument("--file", default="gpt_replies.txt", help="要发送的文件路径")
+    p.add_argument("--files", nargs="+", default=["gpt_replies.txt"], help="要发送的文件路径列表（可多个）")
 
     p.add_argument("--debug", action="store_true", help="打印 SMTP 调试信息")
 
@@ -79,9 +151,32 @@ def main(body_text: str | None = None, target_email: str | None = None):
         args.body = body_text
     if target_email is not None:
         args.to = target_email
-    send_mail(args.host, args.port, user, pwd, args.mail_from,
-              args.to, args.sub, args.body, args.file, debug=args.debug)
-    print("✅ 已发送")
+    if filepaths is not None:
+        args.files = filepaths
+        
+    print(f"[INFO] 开始发送邮件...")
+    print(f"[INFO] 发件人：{args.mail_from}")
+    print(f"[INFO] 附件：{args.files}")
+    
+    if args.batch:
+        # 批量发送模式
+        print(f"[INFO] 批量发送到 {len(args.batch)} 个邮箱")
+        send_mail_batch(args.host, args.port, user, pwd, args.mail_from,
+                       args.batch, args.sub, args.body, args.files, debug=args.debug)
+    else:
+        # 单发模式
+        print(f"[INFO] 发送到：{args.to}")
+        send_mail(args.host, args.port, user, pwd, args.mail_from,
+                 args.to, args.sub, args.body, args.files, debug=args.debug)
+    
+    print("✅ 发送完成")
 
 if __name__ == "__main__":
-    main()
+    files_to_send = [
+        r"E:\coin_works\project\video_storage\DA 交易者聯盟\2025-08-26-DA交易者聯盟-1\2025-08-26-DA交易者聯盟-1.txt",    # 改成你的绝对路径
+        r"E:\coin_works\project\video_storage\DA 交易者聯盟\2025-08-26-DA交易者聯盟-1\frames.zip",  # 改成你的绝对路径
+    ]
+    main(
+        body_text= "这是新的视频帧zip和txt文件",
+        filepaths= files_to_send
+    )

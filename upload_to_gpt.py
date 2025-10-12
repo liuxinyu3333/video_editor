@@ -3,8 +3,6 @@ import time
 import subprocess
 import json
 from typing import List, Optional, Dict, Any
-import glob
-import Email_sender
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -39,7 +37,49 @@ def start_chrome_with_debug(port: int = CHROME_PORT, user_data_dir: str = CHROME
         f"--user-data-dir={user_data_dir}",
         "--profile-directory=Default",
         "--no-first-run",
-        "--no-default-browser-check"
+        "--no-default-browser-check",
+        # 添加反检测参数
+        "--disable-blink-features=AutomationControlled",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor",
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-plugins",
+        "--disable-images",
+        "--disable-javascript",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-field-trial-config",
+        "--disable-ipc-flooding-protection",
+        "--disable-hang-monitor",
+        "--disable-prompt-on-repost",
+        "--disable-domain-reliability",
+        "--disable-component-extensions-with-background-pages",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--hide-scrollbars",
+        "--mute-audio",
+        "--no-default-browser-check",
+        "--no-first-run",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-client-side-phishing-detection",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-hang-monitor",
+        "--disable-prompt-on-repost",
+        "--disable-sync",
+        "--disable-web-resources",
+        "--metrics-recording-only",
+        "--no-first-run",
+        "--safebrowsing-disable-auto-update",
+        "--enable-automation",
+        "--password-store=basic",
+        "--use-mock-keychain"
     ]
     try:
         subprocess.Popen(chrome_cmd, shell=True)
@@ -217,6 +257,7 @@ def upload_files(driver, file_paths: List[str], per_file_wait=180):
     # 4) 按文件名等待“附件气泡/标签”出现，确认加入成功
     for ap in abs_list:
         name = Path(ap).name
+        
         try:
             WebDriverWait(driver, per_file_wait).until(
                 EC.any_of(
@@ -225,35 +266,57 @@ def upload_files(driver, file_paths: List[str], per_file_wait=180):
                     EC.presence_of_element_located((By.XPATH, f"//*[text()[contains(., '{name}')]]")),
                 )
             )
+            time.sleep(20)
         except TimeoutException:
             print(f"[警告] 超时未确认到附件：{name}（可能 UI 文案变更或仍在队列）。继续后续流程。")
+        
     time.sleep(10)
 
 def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=300) -> str:
+    import random
+    
+    # 随机延迟，模拟人类行为
+    time.sleep(random.uniform(2, 5))
+    
     box = find_prompt_box(driver)
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", box)
     except Exception:
         pass
+    
+    # 模拟人类点击行为
+    time.sleep(random.uniform(0.5, 1.5))
     box.click()
+    
+    # 随机延迟
+    time.sleep(random.uniform(1, 3))
+    
     is_div_editable = (box.tag_name.lower() == "div" and (box.get_attribute("contenteditable") or "").lower() == "true")
     if is_div_editable:
         try:
             box.send_keys(Keys.CONTROL, "a")
+            time.sleep(random.uniform(0.3, 0.8))
             box.send_keys(Keys.BACKSPACE)
+            time.sleep(random.uniform(0.5, 1.0))
         except Exception:
             pass
     else:
         if box.tag_name.lower() == "textarea":
             try:
                 box.clear()
+                time.sleep(random.uniform(0.5, 1.0))
             except Exception:
                 pass
-    box.send_keys(prompt)
+    
+    # 模拟人类打字速度
+    for char in prompt:
+        box.send_keys(char)
+        time.sleep(random.uniform(0.01, 0.05))  # 随机打字速度
+    
     print(f"[DEBUG] 已输入文本: {prompt[:50]}...")
 
-    # 等待一下确保文本已输入
-    time.sleep(10)
+    # 随机等待
+    time.sleep(random.uniform(8, 15))
     
     # 发送（优先按钮，失败回车兜底）
     send_btn_candidates = [
@@ -272,7 +335,7 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
             print(f"[DEBUG] 找到发送按钮: {sel}")
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-                time.sleep(0.5)
+                time.sleep(random.uniform(0.5, 1.5))
             except Exception:
                 pass
             
@@ -283,6 +346,8 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
                 continue
                 
             try:
+                # 模拟人类点击
+                time.sleep(random.uniform(0.3, 0.8))
                 btn.click()
                 print(f"[DEBUG] 成功点击发送按钮: {sel}")
                 sent = True
@@ -290,6 +355,7 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
             except Exception as e:
                 print(f"[DEBUG] 点击失败，尝试JS点击: {e}")
                 try:
+                    time.sleep(random.uniform(0.5, 1.0))
                     driver.execute_script("arguments[0].click();", btn)
                     print(f"[DEBUG] JS点击成功: {sel}")
                     sent = True
@@ -303,7 +369,7 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
         try:
             # 先确保焦点在输入框
             box.click()
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.5, 1.0))
             # 尝试不同的回车方式
             box.send_keys(Keys.ENTER)
             print("[DEBUG] 回车发送成功")
@@ -312,6 +378,7 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
             print(f"[DEBUG] 回车发送失败: {e}")
             try:
                 # 最后尝试 Ctrl+Enter
+                time.sleep(random.uniform(0.5, 1.0))
                 box.send_keys(Keys.CONTROL, Keys.ENTER)
                 print("[DEBUG] Ctrl+Enter发送成功")
                 sent = True
@@ -323,13 +390,33 @@ def send_prompt_and_wait(driver: webdriver.Chrome, prompt: str, reply_timeout=30
         return "（发送失败：无法找到或点击发送按钮）"
 
     print("[DEBUG] 等待GPT回复...")
+    
+    # 检查是否出现验证码
+    try:
+        # 等待验证码或回复
+        WebDriverWait(driver, 10).until_any([
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-message-author-role='assistant']")),
+            EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'verify') or contains(text(), '验证') or contains(text(), 'captcha')]")),
+            EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'human') or contains(text(), 'human')]"))
+        ])
+    except:
+        pass
+    
+    # 检查是否需要验证
+    verification_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'verify') or contains(text(), '验证') or contains(text(), 'captcha') or contains(text(), 'human')]")
+    if verification_elements:
+        print("[WARNING] 检测到人机验证，请手动完成验证...")
+        # 等待用户手动验证
+        input("请完成验证后按回车继续...")
+    
     try:
         msg = WebDriverWait(driver, reply_timeout).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-message-author-role='assistant']"))
         )
     except Exception:
         return "（超时：未等到模型回复）"
-    time.sleep(30)
+    
+    time.sleep(random.uniform(25, 35))
     msgs = driver.find_elements(By.CSS_SELECTOR, "[data-message-author-role='assistant']")
     last = msgs[-1]
     return last.text
@@ -340,6 +427,14 @@ def run_get_reply(prompt: str, files: List[str]) -> str:
     try:
         wait_for_login(driver, timeout=180)
         driver.get(CHAT_URL)
+        
+        # 检查是否需要验证
+        time.sleep(3)
+        verification_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'verify') or contains(text(), '验证') or contains(text(), 'captcha') or contains(text(), 'human')]")
+        if verification_elements:
+            print("[WARNING] 检测到人机验证，请手动完成验证...")
+            input("请完成验证后按回车继续...")
+        
         upload_files(driver, files)
         reply = send_prompt_and_wait(driver, prompt)
         return reply
@@ -349,7 +444,6 @@ def run_get_reply(prompt: str, files: List[str]) -> str:
     finally:
         # 不关闭浏览器，保持连接
         pass
-
 def find_video_results(results_file: str = STORAGE_DIR / "results.jsonl") -> List[Dict[str, Any]]:
     """从results.jsonl读取记录，查找所有视频处理结果（包含txt和zip的目录）"""
     results = []
@@ -427,6 +521,9 @@ def find_video_results(results_file: str = STORAGE_DIR / "results.jsonl") -> Lis
             print(f"[WARN] 记录缺少必要文件: {video_folder} (txt: {txt_file}, zip: {zip_file})")
     
     return results
+
+
+
 def batch_process_to_gpt(prompt_template: str, output_file: str = "gpt_replies.txt"):
     """批量处理所有视频结果到GPT"""
     results = find_video_results()
@@ -488,7 +585,15 @@ def batch_process_to_gpt(prompt_template: str, output_file: str = "gpt_replies.t
 def run(prompt: str, files: List[str]):
     """单次运行（保持原有接口）"""
     reply = run_get_reply(prompt, files)
-    Email_sender.main(reply)
+
+    with open("gpt_replies.txt", "a", encoding="utf-8") as f:
+        f.write(f"文件: {files[0]}\n")
+        f.write(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Prompt: {prompt}\n")
+        f.write(f"GPT回复:\n{reply}\n")
+        f.write("-" * 80 + "\n\n")
+    time.sleep(5)
+    #Email_sender.main(reply)
     print("\n=== 模型回复（截取） ===\n")
     print(reply[:2000])
 
@@ -506,5 +611,10 @@ if __name__ == "__main__":
     # files_to_send = [
     #     r"E:\coin_works\project\video_storage\DA 交易者聯盟\2025-08-22-DA交易者聯盟-1\2025-08-22-DA交易者聯盟-1.txt",    # 改成你的绝对路径
     #     r"E:\coin_works\project\video_storage\DA 交易者聯盟\2025-08-22-DA交易者聯盟-1\frames.zip",  # 改成你的绝对路径
+    files_to_send = [
+        r"E:\coin_works\project\video_storage\Kolunite社区\2025-09-01-Kolunite社区-1\2025-09-01-Kolunite社区-1.txt",
+        r"E:\coin_works\project\video_storage\Kolunite社区\2025-09-01-Kolunite社区-1\frames.zip",
+    ]
+    run(prompt_text, files_to_send)
     # ]
-    batch_process_to_gpt(prompt_text)
+    # batch_process_to_gpt(prompt_text)

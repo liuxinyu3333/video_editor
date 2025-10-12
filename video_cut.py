@@ -5,11 +5,9 @@ from typing import List, Optional, Tuple, Set
 import ffmpeg
 from PIL import Image
 import imagehash
+from subtitle_enhance import Enhancer  # 新增
 
-# === 并发相关 ===
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing
-import threading
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_STORAGE_DIR = PROJECT_ROOT / "video_storage"
@@ -17,10 +15,9 @@ DEFAULT_MANIFEST = DEFAULT_STORAGE_DIR / "manifest.jsonl"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "frames_output"
 
 # 线程安全打印，避免多线程输出打架
-_PRINT_LOCK = threading.Lock()
+
 def tprint(*args, **kwargs):
-    with _PRINT_LOCK:
-        print(*args, **kwargs)
+    print(*args, **kwargs)
 
 @dataclass
 class SubtitleEntry:
@@ -205,8 +202,37 @@ def _choose_out_dir(out_root: Path, uploader: str, base: str) -> Path:
         d = out_root / uploader_s / f"vid_{h}"
     return d
 
-def process_one_video(video_path: Path, subtitle_path: Path, out_root: Path, max_subs: int = 0, similarity_threshold: int = 5):
+
+def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    """返回区间重叠时长（秒），无重叠为 0"""
+    left = max(a_start, b_start)
+    right = min(a_end, b_end)
+    return max(0.0, right - left)
+
+def collect_subtitles_text(entries: List[SubtitleEntry], win_start: float, win_end: float) -> str:
+    """
+    收集 [win_start, win_end] 区间内与字幕有重叠的条目文本，按时间顺序拼接。
+    多行字幕保持原样；不同条目之间用换行分隔，必要时可改为空格。
+    """
+    picked = []
+    for e in entries:
+        if _overlap(e.start, e.end, win_start, win_end) > 0.0:
+            picked.append((e.start, e.end, e.text))
+    picked.sort(key=lambda x: x[0])
+    texts = []
+    for (s, e, t) in picked:
+        if t.strip():
+            texts.append(t.strip())
+    return "\n".join(texts).strip()
+
+
+
+
+def process_one_video(video_path: Path, subtitle_path: Path, out_root: Path, max_subs: int = 0, similarity_threshold: int = 5, subs_per_chunk: int = 0, write_chunks: bool = True) -> List[str]:
     entries = parse_subtitles(subtitle_path)
+    enhancer = Enhancer()
+
+
     if not entries:
         tprint(f"[skip] 无字幕条目：{subtitle_path}")
         return
@@ -219,13 +245,24 @@ def process_one_video(video_path: Path, subtitle_path: Path, out_root: Path, max
     out_dir = _choose_out_dir(out_root, uploader=video_dir.name, base=video_basename)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    enhanced_jsonl = (out_dir / "enhanced_captions.jsonl")
+    enhanced_f = enhanced_jsonl.open("w", encoding="utf-8")
+
     total = len(entries) if max_subs <= 0 else min(len(entries), max_subs)
     tprint(f"处理：{video_basename} | 条目 {total}/{len(entries)} | 时长 {duration:.2f}s | 相似度阈值 {similarity_threshold}")
 
     saved_hashes: Set[str] = set()
     saved_count = 0
     skipped_count = 0
-
+        # === 新增：按每 N 张成功保存的帧切分字幕 ===
+    subs_chunks: List[str] = []
+    subs_chunk_size = max(0, int(subs_per_chunk))  # 0 表示禁用
+    saved_in_current_segment = 0
+    segment_start_time: Optional[float] = None
+    last_saved_time: Optional[float] = None
+    img_info: Optional[Enhancer.ImageInfo] = None
+    enh_text: str = ""
+    info_str: str = ""
     for idx, e in enumerate(entries[:total], 1):
         safe_end = max(duration - 0.01, 0.0) if duration > 0 else max(e.end, e.start)
         start_time = max(0.0, min(e.start, safe_end))
@@ -233,35 +270,93 @@ def process_one_video(video_path: Path, subtitle_path: Path, out_root: Path, max
         mid_time = max(0.0, min((start_time + end_time) / 2.0, safe_end))
 
         # 跳过开头10秒
-        if start_time < 10.0:
+        if start_time < 12.0:
             continue
 
-        time_points = [(start_time, "start"), (mid_time, "mid"), (end_time, "end")]
-        for t, frame_type in time_points:
-            ts_name = _sec_to_fname_ts(t)
-            fname = f"{ts_name}_{frame_type}.jpg"
-            out_img = out_dir / fname
+        #time_points = [(start_time, "start"), (mid_time, "mid"), (end_time, "end")]
+        #for t, frame_type in time_points:
+        ts_name = _sec_to_fname_ts(mid_time)
+        #fname = f"{ts_name}_{frame_type}.jpg"
+        fname = f"{ts_name}.jpg"
+        out_img = out_dir / fname
 
-            ok = extract_frame(video_path, t, out_img)
-            if not ok and t > 0:
-                ok = extract_frame(video_path, max(0.0, t - 0.2), out_img)
+        ok = extract_frame(video_path, mid_time, out_img)
+        if not ok and mid_time > 0:
+            ok = extract_frame(video_path, max(0.0, mid_time - 0.2), out_img)
 
-            if ok:
-                if is_similar_to_previous(out_img, saved_hashes, similarity_threshold):
-                    out_img.unlink(missing_ok=True)
-                    skipped_count += 1
-                    tprint(f"  [skip] 相似帧已跳过：{video_basename} | {fname}")
+        if ok:
+            if is_similar_to_previous(out_img, saved_hashes, similarity_threshold):
+                out_img.unlink(missing_ok=True)
+                skipped_count += 1
+                tprint(f"  [skip] 相似帧已跳过：{video_basename} | {fname}")
+            else:
+                current_hash = calculate_image_hash(out_img)
+                if current_hash:
+                    saved_hashes.add(current_hash)
+                    saved_count += 1
+                    tprint(f"  [save] 新帧已保存：{video_basename} | {fname}")
+                    # —— 新增：分析当前帧并增强字幕 —— 
+                    img_info = enhancer.analyze_image(out_img, current_hash)
+                    enh_text, info_str = enhancer.enhance_caption(e.text, img_info)
+
+                    # 以字符串落盘（JSONL：一行一条）
+
+
                 else:
-                    current_hash = calculate_image_hash(out_img)
-                    if current_hash:
-                        saved_hashes.add(current_hash)
-                        saved_count += 1
-                        tprint(f"  [save] 新帧已保存：{video_basename} | {fname}")
-                    else:
-                        saved_count += 1
-                        tprint(f"  [save] 帧已保存（哈希计算失败）：{video_basename} | {fname}")
+                    saved_count += 1
+                    tprint(f"  [save] 帧已保存（哈希计算失败）：{video_basename} | {fname}")
+                                        # === 新增：统计“成功保存的帧”并按 N 张切分字幕 ===
+                # 当前帧时间点用于作为本段的“结束处”
+                current_frame_time = mid_time
+                if segment_start_time is None:
+                    # 第一张成功保存的帧，作为本段起点
+                    segment_start_time = current_frame_time
+                saved_in_current_segment += 1
+                last_saved_time = current_frame_time
 
+                # 达到 N 张则切一段
+                if subs_chunk_size > 0 and saved_in_current_segment >= subs_chunk_size:
+                    chunk_text = collect_subtitles_text(entries, segment_start_time, current_frame_time)
+                    if chunk_text:
+                        subs_chunks.append(chunk_text)
+                    # 下一段从当前帧时间开始
+                    segment_start_time = current_frame_time
+                    saved_in_current_segment = 0
+            
+            enhanced_record = {
+                "image": str(out_img),
+                "start": start_time,
+                "end": end_time,
+                "subtitle_orig": e.text,
+                "subtitle_enhanced": enh_text,
+                "image_info": info_str
+            }
+            enhanced_f.write(json.dumps(enhanced_record, ensure_ascii=False) + "\n")
+    # === 新增：补齐尾段（不足 N 张但仍需输出）
+    if subs_chunk_size > 0 and segment_start_time is not None and last_saved_time is not None and saved_in_current_segment > 0:
+        chunk_text = collect_subtitles_text(entries, segment_start_time, last_saved_time)
+        if chunk_text:
+            subs_chunks.append(chunk_text)
     tprint(f"  [summary] {video_basename} | 保存 {saved_count} 帧，跳过 {skipped_count} 相似帧")
+
+    return subs_chunks
+    # === 新增：写出分段字幕列表到 JSON（与该视频帧同目录）
+    # if subs_chunk_size > 0 and write_chunks:
+    #     meta = {
+    #         "video": str(video_path),
+    #         "subtitle": str(subtitle_path),
+    #         "subs_per_chunk": subs_chunk_size,
+    #         "chunks_count": len(subs_chunks),
+    #         "chunks": subs_chunks
+    #     }
+    #     out_json = out_dir / f"subs_chunks_{subs_chunk_size}.json"
+    #     try:
+    #         with out_json.open("w", encoding="utf-8") as f:
+    #             json.dump(meta, f, ensure_ascii=False, indent=2)
+    #         tprint(f"  [subs] 已写出分段字幕：{out_json}")
+    #     except Exception as e:
+    #         tprint(f"[warn] 写分段字幕失败：{out_json} | {e}")
+
 
 def load_manifest(manifest_path: Path) -> List[dict]:
     if not manifest_path.exists():
@@ -279,10 +374,10 @@ def load_manifest(manifest_path: Path) -> List[dict]:
                 continue
     return records
 
-def _default_workers() -> int:
-    # I/O + ffmpeg 子进程为主，适当高于 CPU 数
-    cpu = multiprocessing.cpu_count()
-    return max(2, min(4, cpu))
+# def _default_workers() -> int:
+#     # I/O + ffmpeg 子进程为主，适当高于 CPU 数
+#     cpu = multiprocessing.cpu_count()
+#     return max(2, min(4, cpu))
 
 def main():
     parser = argparse.ArgumentParser(description="按字幕时间戳抽取起始/中点/结束帧（多线程：一视频一线程）")
@@ -291,7 +386,9 @@ def main():
     parser.add_argument("--max-subs", type=int, default=0, help="每个视频最多处理的字幕条目数；0=不限制")
     parser.add_argument("--only-video", type=str, default="", help="仅处理匹配此文件名片段的视频（可选）")
     parser.add_argument("--similarity-threshold", type=int, default=5, help="相似度阈值（0-64，越小越严格，默认5）")
-    parser.add_argument("--workers", type=int, default=_default_workers(), help="并发线程数（一个视频对应一个线程）")
+   #  parser.add_argument("--workers", type=int, default=_default_workers(), help="并发线程数（一个视频对应一个线程）")
+    parser.add_argument("--subs-per-chunk", type=int, default=6, help="每成功保存 N 张图片帧切一段字幕并输出到 JSON；0=不启用")
+
     args = parser.parse_args()
 
     manifest_path = Path(args.manifest)
@@ -311,30 +408,32 @@ def main():
         if not v or not s: continue
         vpath = Path(v)
         spath = Path(s)
-        if args.only_video and args.only_video not in vpath.name: continue
-        if not vpath.exists() or not spath.exists(): continue
-        tasks.append((vpath, spath))
+        process_one_video(vpath, spath, out_root, max_subs=0, similarity_threshold=4, subs_per_chunk = 6)
+        
+        # if args.only_video and args.only_video not in vpath.name: continue
+        # if not vpath.exists() or not spath.exists(): continue
+        # tasks.append((vpath, spath))
 
     if not tasks:
         tprint("无符合条件的视频。")
         return
 
-    tprint(f"共 {len(tasks)} 个视频，启动并发抽帧：workers={args.workers}")
+    # tprint(f"共 {len(tasks)} 个视频，启动并发抽帧：workers={args.workers}")
     futures = []
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
-        for vpath, spath in tasks:
-            futures.append(ex.submit(
-                process_one_video,
-                vpath, spath, out_root,
-                args.max_subs, args.similarity_threshold
-            ))
+    # with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+    #     for vpath, spath in tasks:
+    #         futures.append(ex.submit(
+    #             process_one_video,
+    #             vpath, spath, out_root,
+    #             args.max_subs, args.similarity_threshold
+    #         ))
 
-        # 等待全部完成并收集异常
-        for fut in as_completed(futures):
-            try:
-                fut.result()
-            except Exception as e:
-                tprint(f"[error] 抽帧线程异常：{e}")
+    #     # 等待全部完成并收集异常
+    #     for fut in as_completed(futures):
+    #         try:
+    #             fut.result()
+    #         except Exception as e:
+    #             tprint(f"[error] 抽帧线程异常：{e}")
 
     tprint("全部抽帧任务完成。")
 
