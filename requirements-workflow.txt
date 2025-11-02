@@ -1,0 +1,8 @@
+# workflow_1010.py 及其依赖模块所需的第三方库
+
+# OpenAI API
+openai>=1.0.0
+
+# 币安API数据获取（get_binance.py）
+pandas>=1.5.0
+requests>=2.31.0

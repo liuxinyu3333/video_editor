@@ -1,0 +1,42 @@
+# YouTube视频下载和处理
+yt-dlp>=2023.12.30
+
+# 视频处理和抽帧
+ffmpeg-python>=0.2.0
+
+# 图像处理
+Pillow>=10.0.0
+imagehash>=4.3.1
+
+# Web自动化 (Selenium)
+selenium>=4.15.0
+webdriver-manager>=4.0.1
+
+# HTTP请求
+requests>=2.31.0
+
+# 时区处理 (Python 3.9+)
+# zoneinfo是Python 3.9+的标准库
+# 如果使用Python 3.8或更早版本，请取消注释下面这行：
+# backports.zoneinfo>=0.2.1
+
+# 其他标准库依赖（无需安装）：
+# - json (标准库)
+# - time (标准库) 
+# - shutil (标准库)
+# - pathlib (标准库)
+# - datetime (标准库)
+# - typing (标准库)
+# - os (标准库)
+# - re (标准库)
+# - subprocess (标准库)
+# - argparse (标准库)
+# - dataclasses (标准库)
+# - concurrent.futures (标准库)
+# - multiprocessing (标准库)
+# - threading (标准库)
+# - smtplib (标准库)
+# - ssl (标准库)
+# - mimetypes (标准库)
+# - email (标准库)
+
